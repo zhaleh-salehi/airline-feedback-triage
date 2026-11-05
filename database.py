@@ -1,12 +1,20 @@
+import os
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATABASE_URL = "sqlite:///./feedback.db"
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}
-)
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL was not found in the .env file")
+
+
+engine = create_engine(DATABASE_URL)
+
 
 SessionLocal = sessionmaker(
     bind=engine,
@@ -14,11 +22,13 @@ SessionLocal = sessionmaker(
     autoflush=False
 )
 
+
 Base = declarative_base()
 
 
 def get_db():
     db = SessionLocal()
+
     try:
         yield db
     finally:
