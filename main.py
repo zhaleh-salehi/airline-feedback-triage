@@ -1,15 +1,17 @@
 from fastapi import Depends, FastAPI, HTTPException, Query
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+import analyzer
 import models
 import schemas
+
 from database import engine, get_db
-import analyzer
 
 
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI()
+app = FastAPI(title="Airline Feedback Triage System")
 
 
 @app.get("/")
@@ -17,127 +19,139 @@ def root():
     return {"status": "ok"}
 
 
-@app.post("/comments", response_model=schemas.CommentOut)
+# Receive, analyze and save ONE tweet
+@app.post(
+    "/comments",
+    response_model=schemas.CommentOut,
+    status_code=201
+)
 def create_comment(
     comment: schemas.CommentCreate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db)
 ):
-    db_comment = models.Comment(**comment.model_dump())
 
-    db.add(db_comment)
-    db.commit()
-    db.refresh(db_comment)
+    # Step 1: Check for duplicate tweet
+    existing = (
+        db.query(models.Comment)
+        .filter_by(tweet_id=comment.tweet_id)
+        .first()
+    )
 
-    return db_comment
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="Tweet already exists"
+        )
+
+    # Step 2: Analyze the tweet with AI
+    try:
+        result = analyzer.analyze_text(comment.text)
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="AI analysis failed"
+        ) from exc
+
+    # Step 3: Save tweet and analysis together
+    try:
+        db_comment = models.Comment(
+            **comment.model_dump(),
+            classification=result["classification"],
+            sentiment=result["sentiment"]
+        )
+
+        db.add(db_comment)
+        db.flush()
+
+        db_analysis = models.Analysis(
+            comment_id=db_comment.id,
+            model=analyzer.MODEL,
+            prompt_version=analyzer.PROMPT_VERSION,
+            classification=result["classification"],
+            sentiment=result["sentiment"],
+            tokens_used=result["tokens_used"]
+        )
+
+        db.add(db_analysis)
+
+        db.commit()
+        db.refresh(db_comment)
+
+        return db_comment
+
+    except IntegrityError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="Tweet already exists or violates a database constraint"
+        ) from exc
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail="Database error while saving tweet"
+        ) from exc
 
 
-@app.get("/comments", response_model=list[schemas.CommentOut])
+# Get all processed tweets
+@app.get(
+    "/comments",
+    response_model=list[schemas.CommentOut]
+)
 def list_comments(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db)
 ):
+
     return (
         db.query(models.Comment)
+        .order_by(models.Comment.id)
         .offset(skip)
         .limit(limit)
         .all()
     )
 
 
-@app.get("/comments/{comment_id}", response_model=schemas.CommentOut)
+# Get one processed tweet
+@app.get(
+    "/comments/{comment_id}",
+    response_model=schemas.CommentOut
+)
 def get_comment(
     comment_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db)
 ):
+
     comment = db.get(models.Comment, comment_id)
 
     if comment is None:
         raise HTTPException(
             status_code=404,
-            detail="Comment not found",
+            detail="Comment not found"
         )
 
     return comment
 
-@app.patch("/comments/{comment_id}", response_model=schemas.CommentOut)
-def update_comment(
-    comment_id: int,
-    update: schemas.CommentUpdate,
-    db: Session = Depends(get_db),
-):
-    comment = db.get(models.Comment, comment_id)
-    if comment is None:
-        raise HTTPException(status_code=404, detail="Comment not found")
-    for field, value in update.model_dump(exclude_unset=True).items():
-        setattr(comment, field, value)
-    db.commit()
-    db.refresh(comment)
-    return comment
 
-
-@app.delete("/comments/{comment_id}")
-def delete_comment(
-    comment_id: int,
-    db: Session = Depends(get_db),
-):
-    comment = db.get(models.Comment, comment_id)
-
-    if comment is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Comment not found",
-        )
-
-    db.delete(comment)
-    db.commit()
-
-    return {"deleted": comment_id}
-
-
-@app.post(
-    "/comments/{comment_id}/analyze",
-    response_model=schemas.AnalysisOut,
-)
-def analyze_comment(
-    comment_id: int,
-    db: Session = Depends(get_db),
-):
-    comment = db.get(models.Comment, comment_id)
-
-    if comment is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Comment not found",
-        )
-
-    result = analyzer.analyze_text(comment.text)
-
-    analysis = models.Analysis(
-        comment_id=comment.id,
-        model=analyzer.MODEL,
-        prompt_version=analyzer.PROMPT_VERSION,
-        **result,
-    )
-
-    db.add(analysis)
-    db.commit()
-    db.refresh(analysis)
-
-    return analysis
-
-
+# Get analysis history
 @app.get(
     "/analyses",
-    response_model=list[schemas.AnalysisOut],
+    response_model=list[schemas.AnalysisOut]
 )
 def list_analyses(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db)
 ):
+
     return (
         db.query(models.Analysis)
+        .order_by(models.Analysis.id)
         .offset(skip)
         .limit(limit)
         .all()

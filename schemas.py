@@ -1,40 +1,68 @@
 from datetime import datetime
-from typing import Optional
+from pydantic import field_validator
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
+# Input: Receive one tweet
 class CommentCreate(BaseModel):
-    tweet_id: Optional[str] = None
-    airline: Optional[str] = None
-    text: str
-    true_sentiment: Optional[str] = None
-    true_reason: Optional[str] = None
+    tweet_id: str = Field(min_length=1)
+    airline_sentiment: str | None = None
+    airline: str | None = None
+    name: str | None = None
+    text: str = Field(min_length=1)
+    tweet_created: datetime | None = None
+
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Tweet text cannot be empty or whitespace")
+        return value
 
 
+# Output: Tweet with AI results
 class CommentOut(CommentCreate):
     id: int
+
+    classification: Literal[
+        "complaint",
+        "compliment",
+        "request"
+    ]
+
+    sentiment: Literal[
+        "positive",
+        "negative",
+        "neutral"
+    ]
+
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
+
+# Output: LLM analysis history
 class AnalysisOut(BaseModel):
     id: int
     comment_id: int
+
     model: str
     prompt_version: str
-    sentiment: str
-    category: str
-    urgency: str
-    department: str
-    tokens_used: int
+
+    classification: Literal[
+        "complaint",
+        "compliment",
+        "request"
+    ]
+
+    sentiment: Literal[
+        "positive",
+        "negative",
+        "neutral"
+    ]
+
+    tokens_used: int | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
-
-
-class CommentUpdate(BaseModel):
-    airline: Optional[str] = None
-    text: Optional[str] = None
-    true_sentiment: Optional[str] = None
-    true_reason: Optional[str] = None
