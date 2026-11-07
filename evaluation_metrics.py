@@ -9,6 +9,8 @@ FILES = {
     "GPT-4o-mini / v3": "evaluation_results_v3.csv",
     "GPT-4.1-mini / v3": "evaluation_results_41_v3.csv",
     "GPT-5-mini / v3": "evaluation_results_5_v3.csv",
+    "GPT-4.1-mini / v2": "evaluation_results_41_v2.csv",
+    "GPT-5-mini / v2": "evaluation_results_5_v2.csv",
 }
 
 CLASSIFICATION_LABELS = [
