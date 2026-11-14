@@ -10,7 +10,7 @@ PRICES = {
     "gpt-5-mini": {"input": 0.25, "output": 2.00},
 }
 
-INPUT_FILE = Path("data/evaluation_latency_results.csv")
+INPUT_FILE = Path("../../data/evaluation_latency_results.csv")
 
 
 def main():

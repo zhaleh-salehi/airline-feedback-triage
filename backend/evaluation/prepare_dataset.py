@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 # File paths
-DATA_DIR = Path("data")
+DATA_DIR = Path("../../data")
 
 INPUT_FILE = DATA_DIR / "original_Tweets.csv"
 OUTPUT_FILE = DATA_DIR / "Tweets_clean.csv"

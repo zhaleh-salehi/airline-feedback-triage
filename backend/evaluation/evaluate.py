@@ -2,11 +2,13 @@ import csv
 import os
 from pathlib import Path
 
-from analyzer_v3 import analyze_text, MODEL, PROMPT_VERSION
+from backend.analyzer import analyze_text, MODEL, PROMPT_VERSION
+
 
 # File paths
-INPUT_FILE = Path("data/evaluation_dataset_labeled_01_100_draft.csv")
-OUTPUT_FILE = Path("data/evaluation_results_v3.csv")
+INPUT_FILE = Path("../../data/evaluation_dataset_labeled_01_100_draft.csv")
+OUTPUT_FILE = Path("../../data/evaluation_results_v2.csv")
+
 # Evaluate 100 tweets
 LIMIT = 100
 

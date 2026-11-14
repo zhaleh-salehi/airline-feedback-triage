@@ -9,7 +9,7 @@ import requests
 # Configuration
 BASE_URL = "http://127.0.0.1:8000"
 CSV_PATH = Path(__file__).resolve().parent / "data" / "Tweets_clean.csv"
-LIMIT = 5
+LIMIT = 99
 REQUEST_TIMEOUT = 60
 
 

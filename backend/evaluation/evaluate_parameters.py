@@ -2,18 +2,17 @@ import csv
 import time
 from pathlib import Path
 
-import analyzer_v3
-
+from backend import analyzer_v3
 
 # Experiment settings
 MODEL = "gpt-4o-mini"
 
 INPUT_FILE = Path(
-    "data/evaluation_dataset_labeled_01_100_draft.csv"
+    "../../data/evaluation_dataset_labeled_01_100_draft.csv"
 )
 
 OUTPUT_FILE = Path(
-    "data/evaluation_parameter_results.csv"
+    "../../data/evaluation_parameter_results.csv"
 )
 
 LIMIT = 20

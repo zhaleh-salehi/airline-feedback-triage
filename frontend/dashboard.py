@@ -4,8 +4,8 @@ from sklearn.metrics import f1_score
 from pathlib import Path
 from sqlalchemy import select, func
 
-from database import SessionLocal
-from models import Comment
+from backend.database import SessionLocal
+from backend.models import Comment
 
 st.set_page_config(
     page_title="Airline Feedback Dashboard",

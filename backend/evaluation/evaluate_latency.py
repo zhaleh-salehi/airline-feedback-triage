@@ -2,16 +2,11 @@ import csv
 import time
 from pathlib import Path
 
-import analyzer
-import analyzer_v3
-import analyzer_41_v2
-import analyzer_41
-import analyzer_5_v2
-import analyzer_5
+from backend import analyzer, analyzer_v3
+from backend.experiments import analyzer_5_v2, analyzer_41_v2, analyzer_41, analyzer_5
 
-
-INPUT_FILE = Path("data/evaluation_dataset_labeled_01_100_draft.csv")
-OUTPUT_FILE = Path("data/evaluation_latency_results.csv")
+INPUT_FILE = Path("../../data/evaluation_dataset_labeled_01_100_draft.csv")
+OUTPUT_FILE = Path("../../data/evaluation_latency_results.csv")
 
 LIMIT = 20
 

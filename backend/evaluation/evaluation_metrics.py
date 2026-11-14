@@ -2,7 +2,7 @@ import csv
 from pathlib import Path
 
 
-DATA_DIR = Path("data")
+DATA_DIR = Path("../../data")
 
 FILES = {
     "GPT-4o-mini / v2": "evaluation_results_v2.csv",

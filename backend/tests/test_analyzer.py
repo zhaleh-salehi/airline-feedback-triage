@@ -1,6 +1,6 @@
 import csv
 
-from analyzer import analyze_text
+from backend.analyzer import analyze_text
 
 
 CSV_PATH = "data/Tweets.csv"
