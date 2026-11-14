@@ -1,25 +1,36 @@
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
-import analyzer
-import models
-import schemas
+from backend import analyzer, embedding, models, schemas
+from backend.database import engine, get_db
 
-from database import engine, get_db
 
+# ==========================================
+# Database Initialization
+# ==========================================
 
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Airline Feedback Triage System")
+app = FastAPI(
+    title="Airline Feedback Triage System"
+)
 
+
+# ==========================================
+# Root Endpoint
+# ==========================================
 
 @app.get("/")
 def root():
     return {"status": "ok"}
 
 
-# Receive, analyze and save ONE tweet
+# ==========================================
+# POST /comments
+# Receive, Analyze, Embed and Save ONE Tweet
+# ==========================================
+
 @app.post(
     "/comments",
     response_model=schemas.CommentOut,
@@ -30,7 +41,7 @@ def create_comment(
     db: Session = Depends(get_db)
 ):
 
-    # Step 1: Check for duplicate tweet
+    # Step 1: Check duplicate tweet
     existing = (
         db.query(models.Comment)
         .filter_by(tweet_id=comment.tweet_id)
@@ -43,7 +54,7 @@ def create_comment(
             detail="Tweet already exists"
         )
 
-    # Step 2: Analyze the tweet with AI
+    # Step 2: AI Classification + Sentiment
     try:
         result = analyzer.analyze_text(comment.text)
 
@@ -53,17 +64,31 @@ def create_comment(
             detail="AI analysis failed"
         ) from exc
 
-    # Step 3: Save tweet and analysis together
+    # Step 3: Generate Embedding
     try:
+        tweet_embedding = embedding.generate_embedding(
+            comment.text
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Embedding generation failed"
+        ) from exc
+
+    # Step 4: Save Tweet + Analysis
+    try:
+
+        # Store tweet and embedding
         db_comment = models.Comment(
             **comment.model_dump(),
-            classification=result["classification"],
-            sentiment=result["sentiment"]
+            embedding=tweet_embedding
         )
 
         db.add(db_comment)
         db.flush()
 
+        # Store multi-label classification
         db_analysis = models.Analysis(
             comment_id=db_comment.id,
             model=analyzer.MODEL,
@@ -75,10 +100,16 @@ def create_comment(
 
         db.add(db_analysis)
 
+        # Commit both records together
         db.commit()
-        db.refresh(db_comment)
 
-        return db_comment
+        # Reload tweet and its analysis
+        return (
+            db.query(models.Comment)
+            .options(selectinload(models.Comment.analyses))
+            .filter(models.Comment.id == db_comment.id)
+            .one()
+        )
 
     except IntegrityError as exc:
         db.rollback()
@@ -97,7 +128,10 @@ def create_comment(
         ) from exc
 
 
-# Get all processed tweets
+# ==========================================
+# GET /comments
+# ==========================================
+
 @app.get(
     "/comments",
     response_model=list[schemas.CommentOut]
@@ -110,6 +144,7 @@ def list_comments(
 
     return (
         db.query(models.Comment)
+        .options(selectinload(models.Comment.analyses))
         .order_by(models.Comment.id)
         .offset(skip)
         .limit(limit)
@@ -117,7 +152,10 @@ def list_comments(
     )
 
 
-# Get one processed tweet
+# ==========================================
+# GET /comments/{comment_id}
+# ==========================================
+
 @app.get(
     "/comments/{comment_id}",
     response_model=schemas.CommentOut
@@ -127,7 +165,12 @@ def get_comment(
     db: Session = Depends(get_db)
 ):
 
-    comment = db.get(models.Comment, comment_id)
+    comment = (
+        db.query(models.Comment)
+        .options(selectinload(models.Comment.analyses))
+        .filter(models.Comment.id == comment_id)
+        .first()
+    )
 
     if comment is None:
         raise HTTPException(
@@ -138,7 +181,10 @@ def get_comment(
     return comment
 
 
-# Get analysis history
+# ==========================================
+# GET /analyses
+# ==========================================
+
 @app.get(
     "/analyses",
     response_model=list[schemas.AnalysisOut]

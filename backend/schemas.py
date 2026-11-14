@@ -1,10 +1,13 @@
 from datetime import datetime
-from pydantic import field_validator
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# Input: Receive one tweet
+
+# ==========================================
+# Input: Receive One Tweet
+# ==========================================
+
 class CommentCreate(BaseModel):
     tweet_id: str = Field(min_length=1)
     airline_sentiment: str | None = None
@@ -21,28 +24,10 @@ class CommentCreate(BaseModel):
         return value
 
 
-# Output: Tweet with AI results
-class CommentOut(CommentCreate):
-    id: int
+# ==========================================
+# Output: AI Analysis
+# ==========================================
 
-    classification: Literal[
-        "complaint",
-        "compliment",
-        "request"
-    ]
-
-    sentiment: Literal[
-        "positive",
-        "negative",
-        "neutral"
-    ]
-
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-# Output: LLM analysis history
 class AnalysisOut(BaseModel):
     id: int
     comment_id: int
@@ -50,19 +35,26 @@ class AnalysisOut(BaseModel):
     model: str
     prompt_version: str
 
-    classification: Literal[
-        "complaint",
-        "compliment",
-        "request"
+    classification: list[
+        Literal["complaint", "compliment", "request"]
     ]
 
-    sentiment: Literal[
-        "positive",
-        "negative",
-        "neutral"
-    ]
+    sentiment: Literal["positive", "negative", "neutral"]
 
     tokens_used: int | None = None
     created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ==========================================
+# Output: Tweet + Analysis
+# ==========================================
+
+class CommentOut(CommentCreate):
+    id: int
+    created_at: datetime
+
+    analyses: list[AnalysisOut] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
