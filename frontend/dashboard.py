@@ -1,11 +1,19 @@
 import streamlit as st
 import pandas as pd
-from sklearn.metrics import f1_score
+
+from collections import Counter
 from pathlib import Path
+
+from sklearn.metrics import f1_score
 from sqlalchemy import select, func
 
 from backend.database import SessionLocal
-from backend.models import Comment
+from backend.models import Comment, Analysis
+
+
+# ==========================================
+# Dashboard Configuration
+# ==========================================
 
 st.set_page_config(
     page_title="Airline Feedback Dashboard",
@@ -17,16 +25,68 @@ st.title("✈️ Airline Feedback Dashboard")
 
 st.write("Airline Feedback Triage System")
 
-# Read the number of analyzed tweets from PostgreSQL
+
+# ==========================================
+# Database Functions
+# ==========================================
+
 def get_total_tweets():
+
     with SessionLocal() as db:
+
         total = db.scalar(
             select(func.count(Comment.id))
         )
-        return total
 
+        return total or 0
+
+
+def get_latest_analyses():
+
+    with SessionLocal() as db:
+
+        # Find the latest analysis ID for each comment
+        latest_analysis = (
+            select(
+                Analysis.comment_id,
+                func.max(Analysis.id).label("latest_id")
+            )
+            .group_by(Analysis.comment_id)
+            .subquery()
+        )
+
+        # Join comments with their latest analyses
+        results = db.execute(
+            select(
+                Comment.tweet_id,
+                Comment.text,
+                Analysis.classification,
+                Analysis.sentiment
+            )
+            .join(
+                latest_analysis,
+                Comment.id == latest_analysis.c.comment_id
+            )
+            .join(
+                Analysis,
+                Analysis.id == latest_analysis.c.latest_id
+            )
+            .order_by(Comment.id.desc())
+        ).all()
+
+        return results
+
+
+# ==========================================
+# Main Dashboard
+# ==========================================
 
 try:
+
+    # --------------------------------------
+    # Total Tweets
+    # --------------------------------------
+
     total_tweets = get_total_tweets()
 
     st.metric(
@@ -35,116 +95,176 @@ try:
     )
 
     st.success("Connected to PostgreSQL successfully!")
-    # Count tweets by classification
-    classification_counts = {}
 
-    with SessionLocal() as db:
-        results = db.execute(
-            select(
-                Comment.classification,
-                func.count(Comment.id)
-            ).group_by(Comment.classification)
-        ).all()
 
-        classification_counts = dict(results)
+    # --------------------------------------
+    # Load Latest Analyses
+    # --------------------------------------
+
+    tweets = get_latest_analyses()
+
+
+    # ======================================
+    # Classification Distribution
+    # ======================================
+
+    classification_counts = Counter()
+
+    for tweet in tweets:
+
+        labels = tweet.classification
+
+        if labels:
+            classification_counts.update(set(labels))
+
 
     st.subheader("Classification Distribution")
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
+
         st.metric(
             "Complaints",
             classification_counts.get("complaint", 0)
         )
 
     with col2:
+
         st.metric(
             "Compliments",
             classification_counts.get("compliment", 0)
         )
 
     with col3:
+
         st.metric(
             "Requests",
             classification_counts.get("request", 0)
         )
-    # Classification Bar Chart
+
+
+    # Classification Chart
+
     st.subheader("Classification Chart")
 
-    st.bar_chart(
+    classification_chart = pd.DataFrame(
         {
-            "Complaint": classification_counts.get("complaint", 0),
-            "Compliment": classification_counts.get("compliment", 0),
-            "Request": classification_counts.get("request", 0)
+            "Classification": [
+                "Complaint",
+                "Compliment",
+                "Request"
+            ],
+            "Count": [
+                classification_counts.get("complaint", 0),
+                classification_counts.get("compliment", 0),
+                classification_counts.get("request", 0)
+            ]
         }
     )
-    # Count tweets by sentiment
-    with SessionLocal() as db:
-        results = db.execute(
-            select(
-                Comment.sentiment,
-                func.count(Comment.id)
-            ).group_by(Comment.sentiment)
-        ).all()
 
-        sentiment_counts = dict(results)
+    st.bar_chart(
+        classification_chart.set_index("Classification")
+    )
+
+    st.caption(
+        "Multi-label classification: one tweet may belong "
+        "to more than one category."
+    )
+
+
+    # ======================================
+    # Sentiment Distribution
+    # ======================================
+
+    sentiment_counts = Counter()
+
+    for tweet in tweets:
+
+        if tweet.sentiment:
+            sentiment_counts.update([tweet.sentiment])
+
 
     st.subheader("Sentiment Distribution")
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
+
         st.metric(
             "Positive",
             sentiment_counts.get("positive", 0)
         )
 
     with col2:
+
         st.metric(
             "Negative",
             sentiment_counts.get("negative", 0)
         )
 
     with col3:
+
         st.metric(
             "Neutral",
             sentiment_counts.get("neutral", 0)
         )
-    # Sentiment Bar Chart
+
+
+    # Sentiment Chart
+
     st.subheader("Sentiment Chart")
 
-    st.bar_chart(
+    sentiment_chart = pd.DataFrame(
         {
-            "Positive": sentiment_counts.get("positive", 0),
-            "Negative": sentiment_counts.get("negative", 0),
-            "Neutral": sentiment_counts.get("neutral", 0)
+            "Sentiment": [
+                "Positive",
+                "Negative",
+                "Neutral"
+            ],
+            "Count": [
+                sentiment_counts.get("positive", 0),
+                sentiment_counts.get("negative", 0),
+                sentiment_counts.get("neutral", 0)
+            ]
         }
     )
-    # Display analyzed tweets
+
+    st.bar_chart(
+        sentiment_chart.set_index("Sentiment")
+    )
+
+
+    # ======================================
+    # Analyzed Tweets
+    # ======================================
+
     st.subheader("Analyzed Tweets")
 
-    with SessionLocal() as db:
-        tweets = db.execute(
-            select(
-                Comment.tweet_id,
-                Comment.text,
-                Comment.classification,
-                Comment.sentiment
-            ).order_by(Comment.id.desc())
-        ).all()
+    tweet_data = []
 
-    tweet_data = [
-        {
-            "Tweet ID": tweet.tweet_id,
-            "Tweet Text": tweet.text,
-            "Classification": tweet.classification,
-            "Sentiment": tweet.sentiment
-        }
-        for tweet in tweets
-    ]
+    for tweet in tweets:
 
-    tweet_df = pd.DataFrame(tweet_data)
+        labels = tweet.classification or []
+
+        tweet_data.append(
+            {
+                "Tweet ID": tweet.tweet_id,
+                "Tweet Text": tweet.text,
+                "Classification": ", ".join(labels),
+                "Sentiment": tweet.sentiment
+            }
+        )
+
+    tweet_df = pd.DataFrame(
+        tweet_data,
+        columns=[
+            "Tweet ID",
+            "Tweet Text",
+            "Classification",
+            "Sentiment"
+        ]
+    )
 
     st.dataframe(
         tweet_df,
@@ -169,10 +289,16 @@ try:
             )
         }
     )
+
+
+    # ======================================
     # Model & Prompt Comparison
+    # ======================================
+
     st.header("🧪 Model & Prompt Comparison")
 
-    data_folder = Path(__file__).parent / "data"
+    # Data folder is located in the project root
+    data_folder = Path(__file__).resolve().parent.parent / "data"
 
     evaluation_files = {
         "gpt-4o-mini / v2": "evaluation_results_v2.csv",
@@ -186,27 +312,48 @@ try:
     evaluation_data = []
 
     for experiment, filename in evaluation_files.items():
+
         file_path = data_folder / filename
 
-        df = pd.read_csv(file_path, dtype={"tweet_id": str})
+        df = pd.read_csv(
+            file_path,
+            dtype={"tweet_id": str}
+        )
 
-        # Sentiment Accuracy (100 tweets)
+        # ----------------------------------
+        # Sentiment Accuracy
+        # 100 tweets
+        # ----------------------------------
+
         sentiment_accuracy = (
-                                     df["predicted_sentiment"]
-                                     == df["airline_sentiment"]
-                             ).mean() * 100
+            (
+                df["predicted_sentiment"]
+                == df["airline_sentiment"]
+            ).mean() * 100
+        )
 
-        # Classification Accuracy (84 labeled tweets)
+
+        # ----------------------------------
+        # Classification Accuracy
+        # 84 preliminary labeled tweets
+        # ----------------------------------
+
         labeled_df = df[
             df["classification_ground_truth"] != "needs_review"
-            ]
+        ]
 
         classification_accuracy = (
-                                          labeled_df["predicted_classification"]
-                                          == labeled_df["classification_ground_truth"]
-                                  ).mean() * 100
+            (
+                labeled_df["predicted_classification"]
+                == labeled_df["classification_ground_truth"]
+            ).mean() * 100
+        )
 
+
+        # ----------------------------------
         # Macro F1 for Sentiment
+        # ----------------------------------
+
         sentiment_f1 = f1_score(
             df["airline_sentiment"],
             df["predicted_sentiment"],
@@ -214,7 +361,11 @@ try:
             zero_division=0
         ) * 100
 
+
+        # ----------------------------------
         # Macro F1 for Classification
+        # ----------------------------------
+
         classification_f1 = f1_score(
             labeled_df["classification_ground_truth"],
             labeled_df["predicted_classification"],
@@ -222,14 +373,30 @@ try:
             zero_division=0
         ) * 100
 
-        evaluation_data.append({
-            "Experiment": experiment,
-            "Tweets": len(df),
-            "Sentiment Accuracy (%)": round(sentiment_accuracy, 2),
-            "Classification Accuracy (%)": round(classification_accuracy, 2),
-            "Sentiment Macro F1 (%)": round(sentiment_f1, 2),
-            "Classification Macro F1 (%)": round(classification_f1, 2)
-        })
+
+        evaluation_data.append(
+            {
+                "Experiment": experiment,
+                "Tweets": len(df),
+                "Sentiment Accuracy (%)": round(
+                    sentiment_accuracy, 2
+                ),
+                "Classification Accuracy (%)": round(
+                    classification_accuracy, 2
+                ),
+                "Sentiment Macro F1 (%)": round(
+                    sentiment_f1, 2
+                ),
+                "Classification Macro F1 (%)": round(
+                    classification_f1, 2
+                )
+            }
+        )
+
+
+    # ======================================
+    # Evaluation Results Table
+    # ======================================
 
     st.subheader("Evaluation Experiments")
 
@@ -247,7 +414,11 @@ try:
         }
     )
 
+
+    # ======================================
     # Accuracy Comparison Chart
+    # ======================================
+
     st.subheader("Model Accuracy Comparison")
 
     accuracy_df = pd.DataFrame(evaluation_data)
@@ -261,7 +432,11 @@ try:
 
     st.bar_chart(accuracy_chart)
 
+
+    # ======================================
     # Macro F1 Comparison Chart
+    # ======================================
+
     st.subheader("Model Macro F1 Comparison")
 
     f1_chart = accuracy_df.set_index("Experiment")[
@@ -273,32 +448,65 @@ try:
 
     st.bar_chart(f1_chart)
 
+    st.caption(
+        "Evaluation results are based on historical "
+        "single-label experiments using Prompt v2 and v3. "
+        "Classification results are preliminary and are "
+        "not an evaluation of the new multi-label Prompt v4."
+    )
+
+
+    # ======================================
     # Latency & Token Usage Comparison
+    # ======================================
+
     st.header("⏱️ Latency & Token Usage Comparison")
 
-    latency_file = data_folder / "evaluation_latency_results.csv"
+    latency_file = (
+        data_folder / "evaluation_latency_results.csv"
+    )
 
     latency_df = pd.read_csv(
         latency_file,
         dtype={"tweet_id": str}
     )
 
+
+    # --------------------------------------
+    # Latency Summary
+    # --------------------------------------
+
     latency_summary = (
         latency_df
         .groupby(["model", "prompt_version"])
         .agg(
             Tweets=("tweet_id", "count"),
-            Average_Latency_Seconds=("latency_seconds", "mean"),
-            Total_Input_Tokens=("input_tokens", "sum"),
-            Total_Output_Tokens=("output_tokens", "sum"),
-            Total_Tokens=("total_tokens", "sum")
+            Average_Latency_Seconds=(
+                "latency_seconds", "mean"
+            ),
+            Total_Input_Tokens=(
+                "input_tokens", "sum"
+            ),
+            Total_Output_Tokens=(
+                "output_tokens", "sum"
+            ),
+            Total_Tokens=(
+                "total_tokens", "sum"
+            )
         )
         .reset_index()
     )
 
     latency_summary["Average_Latency_Seconds"] = (
-        latency_summary["Average_Latency_Seconds"].round(3)
+        latency_summary[
+            "Average_Latency_Seconds"
+        ].round(3)
     )
+
+
+    # ======================================
+    # Latency & Token Results Table
+    # ======================================
 
     st.subheader("Latency & Token Usage Results")
 
@@ -307,12 +515,18 @@ try:
         use_container_width=True,
         hide_index=True,
         column_config={
-            col: st.column_config.Column(alignment="center")
+            col: st.column_config.Column(
+                alignment="center"
+            )
             for col in latency_summary.columns
         }
     )
 
-    # Average Latency Comparison Chart
+
+    # ======================================
+    # Average Latency Comparison
+    # ======================================
+
     st.subheader("Average Latency Comparison")
 
     latency_chart = latency_summary.copy()
@@ -329,7 +543,11 @@ try:
         latency_chart["Average_Latency_Seconds"]
     )
 
-    # Token Usage Comparison Chart
+
+    # ======================================
+    # Token Usage Comparison
+    # ======================================
+
     st.subheader("Token Usage Comparison")
 
     token_chart = latency_summary.copy()
@@ -344,15 +562,25 @@ try:
 
     st.bar_chart(
         token_chart[
-            ["Total_Input_Tokens", "Total_Output_Tokens"]
+            [
+                "Total_Input_Tokens",
+                "Total_Output_Tokens"
+            ]
         ]
     )
 
+
+    # ======================================
     # Estimated API Cost Comparison
-    st.header("💰 Estimated API Cost Comparison (20 Tweets)")
+    # ======================================
+
+    st.header(
+        "💰 Estimated API Cost Comparison (20 Tweets)"
+    )
 
     # Prices in USD per 1 million tokens
-    # Same assumptions used in Branch 6
+    # Original pricing assumptions from Branch 6
+
     pricing = {
         "gpt-4o-mini": {
             "input": 0.15,
@@ -368,9 +596,13 @@ try:
         }
     }
 
+
+    # --------------------------------------
+    # Calculate Estimated Cost
+    # --------------------------------------
+
     cost_df = latency_summary.copy()
 
-    # Calculate estimated cost
     cost_df["Estimated Cost (USD)"] = cost_df.apply(
         lambda row: (
             row["Total_Input_Tokens"]
@@ -388,7 +620,11 @@ try:
         + cost_df["prompt_version"]
     )
 
-    # Display comparison table
+
+    # ======================================
+    # Estimated Cost Results Table
+    # ======================================
+
     st.subheader("Estimated Cost Results")
 
     cost_display_df = cost_df[
@@ -407,19 +643,27 @@ try:
         hide_index=True,
         column_config={
             **{
-                col: st.column_config.Column(alignment="center")
+                col: st.column_config.Column(
+                    alignment="center"
+                )
                 for col in cost_display_df.columns
                 if col != "Estimated Cost (USD)"
             },
-            "Estimated Cost (USD)": st.column_config.NumberColumn(
-                "Estimated Cost (USD)",
-                format="$%.6f",
-                alignment="center"
+            "Estimated Cost (USD)": (
+                st.column_config.NumberColumn(
+                    "Estimated Cost (USD)",
+                    format="$%.6f",
+                    alignment="center"
+                )
             )
         }
     )
 
-    # Display cost comparison chart
+
+    # ======================================
+    # Estimated Cost Comparison Chart
+    # ======================================
+
     st.subheader("Estimated Cost Comparison")
 
     st.bar_chart(
@@ -430,11 +674,21 @@ try:
 
     st.caption(
         "Estimated costs are based on 20 identical tweets per "
-        "model/prompt combination. Costs use the pricing assumptions "
-        "recorded in Branch 6. Cached-token discounts, taxes and "
-        "additional fees are excluded. Actual API billing may differ."
+        "model/prompt combination. Costs use the pricing "
+        "assumptions recorded in Branch 6. Cached-token "
+        "discounts, taxes and additional fees are excluded. "
+        "Actual API billing may differ."
     )
 
+
+# ==========================================
+# Error Handling
+# ==========================================
+
 except Exception as e:
-    st.error("An error occurred while loading the dashboard.")
+
+    st.error(
+        "An error occurred while loading the dashboard."
+    )
+
     st.exception(e)
