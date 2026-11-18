@@ -130,6 +130,7 @@ def create_comment(
 
 # ==========================================
 # GET /comments
+# List stored tweets
 # ==========================================
 
 @app.get(
@@ -153,7 +154,71 @@ def list_comments(
 
 
 # ==========================================
+# GET /comments/search
+# Semantic Search using pgvector
+# ==========================================
+
+@app.get(
+    "/comments/search",
+    response_model=list[schemas.CommentOut]
+)
+def semantic_search(
+    query: str = Query(..., min_length=2),
+    limit: int = Query(default=5, ge=1, le=50),
+    db: Session = Depends(get_db)
+):
+
+    # Step 1: Validate search query
+    if not query.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Search query cannot be empty"
+        )
+
+    # Step 2: Generate query embedding
+    try:
+        query_embedding = embedding.generate_embedding(
+            query.strip()
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Search embedding generation failed"
+        ) from exc
+
+    # Step 3: Calculate semantic distance
+    distance = models.Comment.embedding.cosine_distance(
+        query_embedding
+    )
+
+    # Step 4: Search stored tweets
+    try:
+        results = (
+            db.query(models.Comment)
+            .options(
+                selectinload(models.Comment.analyses)
+            )
+            .filter(
+                models.Comment.embedding.isnot(None)
+            )
+            .order_by(distance)
+            .limit(limit)
+            .all()
+        )
+
+        return results
+
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Semantic search database error"
+        ) from exc
+
+
+# ==========================================
 # GET /comments/{comment_id}
+# Get one stored tweet
 # ==========================================
 
 @app.get(
@@ -183,6 +248,7 @@ def get_comment(
 
 # ==========================================
 # GET /analyses
+# List stored analyses
 # ==========================================
 
 @app.get(
