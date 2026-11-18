@@ -18,7 +18,7 @@ Additionally, the system generates a 1536-dimensional embedding for each tweet u
 
 The tweet, its embedding, and the AI analysis results are stored in a PostgreSQL database with the pgvector extension, running inside Docker.
 
-An interactive Streamlit dashboard provides visualizations of customer feedback and comparisons of different AI models and prompt versions.
+An interactive Streamlit dashboard provides visualizations of customer feedback, comparisons of different AI models and prompt versions, semantic search, CSV upload and batch processing, and classification filtering.
 
 The project uses a dataset containing **3,822 United Airlines tweets**.
 
@@ -34,8 +34,11 @@ The project uses a dataset containing **3,822 United Airlines tweets**.
 - **Duplicate Prevention:** Prevents duplicate tweets using unique tweet identifiers.
 - **Error Handling:** Handles invalid input, duplicate tweets, AI failures, embedding failures, and database errors.
 - **Transaction Management:** Uses database transactions to prevent incomplete records.
-- **CSV Batch Processing:** Processes tweets sequentially through the existing FastAPI workflow.
-- **Interactive Dashboard:** Visualizes analyzed tweets, classification and sentiment distributions, and model evaluation results.
+- **CSV Batch Processing:** Processes tweets sequentially through the existing FastAPI workflow, including uploads from the Streamlit dashboard.
+- **CSV Upload & Progress:** Accepts a local CSV file in Streamlit, previews its records, displays processing progress, and reports successful, duplicate, and failed submissions.
+- **Semantic Search:** Uses query embeddings and pgvector cosine distance to rank stored tweets by semantic similarity, including when the exact search words do not appear in the tweet.
+- **Classification Filtering:** Filters analyzed tweets by `All`, `Complaint`, `Compliment`, or `Request`, supporting multiple labels per tweet.
+- **Interactive Dashboard:** Visualizes analyzed tweets, classification and sentiment distributions, semantic-search results, and model evaluation results.
 - **Model Comparison:** Compares six model/prompt combinations using accuracy, Macro F1, latency, token usage, and estimated API costs.
 
 ## Technologies
@@ -65,7 +68,7 @@ The system consists of three main components:
 
 1. **FastAPI Backend:** Receives customer tweets, performs AI analysis, generates embeddings, and stores the results.
 2. **PostgreSQL + pgvector:** Stores tweet information, AI analysis results, and vector embeddings.
-3. **Streamlit Dashboard:** Displays analyzed tweets, classification distributions, sentiment statistics, and model evaluation results.
+3. **Streamlit Dashboard:** Provides CSV upload, classification filters, semantic search via FastAPI, visualizations, and model evaluation results.
 
 ### Processing Workflow
 
@@ -141,7 +144,7 @@ This creates a one-to-many relationship: one comment can have multiple analysis 
 The system supports two processing methods:
 
 - **Single Tweet Processing:** A tweet is submitted directly through the FastAPI endpoint.
-- **CSV Batch Processing:** Tweets are read from a CSV file and submitted sequentially to the same API endpoint.
+- **CSV Batch Processing:** Tweets are read from a CSV file and submitted sequentially to the same API endpoint. Files can be processed by the existing Python script or uploaded through the Streamlit dashboard.
 
 In both cases, each tweet is analyzed before its results are saved.
 
@@ -388,19 +391,41 @@ The `--reload` option is intended for local development.
 
 ## API Endpoints
 
-The FastAPI backend provides five endpoints for processing and retrieving airline customer feedback.
+The FastAPI backend provides six endpoints for processing, retrieving, and semantically searching airline customer feedback.
 
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/` | Check the API status |
 | POST | `/comments` | Analyze a tweet, generate its embedding, and save the results |
 | GET | `/comments` | Retrieve stored tweets and their analyses |
+| GET | `/comments/search` | Rank stored tweets by semantic similarity to a search query |
 | GET | `/comments/{comment_id}` | Retrieve a specific tweet and its analyses |
 | GET | `/analyses` | Retrieve stored AI analysis results |
 
 Interactive API documentation is available through Swagger UI:
 
 `http://127.0.0.1:8000/docs`
+
+### Semantic Search API
+
+The endpoint `GET /comments/search` accepts a free-text query and returns the nearest stored tweets based on semantic similarity.
+
+Example:
+
+```text
+GET /comments/search?query=lost%20baggage&limit=5
+```
+
+- `query`: Required search text (at least two characters; whitespace-only queries are rejected).
+- `limit`: Maximum number of results (default: 5, minimum: 1, maximum: 50).
+- The backend generates an embedding for the search phrase using `text-embedding-3-small`.
+- PostgreSQL with pgvector ranks existing tweet embeddings by **cosine distance**.
+- The response returns stored tweet details and related analyses, ordered from nearest to more distant matches.
+- The search does **not** create new tweets or modify stored records.
+
+**Limitations:** The current version has no minimum similarity threshold and does not return a similarity score. Therefore, the nearest results are not guaranteed to be relevant. Searches require an OpenAI embedding API call, which may incur usage costs. Only tweets with stored embeddings can be returned.
+
+**Observed local example (November 18, 2026):** A search for `lost baggage` ranked the synthetic test tweet `semantic_test_001` first. The tweet stated, “My suitcase never arrived at the airport after my flight. I have no idea where my belongings are.” This demonstrates one successful cross-wording match; it is not a formal retrieval-quality evaluation.
 
 ### Example: Analyze a New Tweet
 
@@ -511,13 +536,14 @@ Example:
 
 The project includes an interactive dashboard built with Streamlit.
 
-The dashboard provides visualizations of airline customer feedback stored in PostgreSQL and evaluation results from CSV files.
+The dashboard provides semantic search, CSV upload and batch processing, classification filtering, visualizations of customer feedback stored in PostgreSQL, and historical evaluation results from CSV files.
 
 ### 1. Start the Dashboard
 
 Make sure that:
 
 - Docker Desktop and the PostgreSQL container are running.
+- The FastAPI backend is running at `http://127.0.0.1:8000` for semantic search and CSV processing.
 - The `.env` file contains the correct database connection settings.
 - The Python virtual environment is activated.
 - The required dependencies are installed.
@@ -544,7 +570,25 @@ The dashboard includes the following components:
 - Classification distribution
 - Sentiment distribution
 - Interactive table of analyzed tweets
-- Support for multi-label classification
+- Filter by `All`, `Complaint`, `Compliment`, or `Request`
+- Support for multi-label classification (a tweet may appear under multiple filters)
+
+**Semantic Search**
+
+- Enter a natural-language search phrase and click **Search**.
+- Choose the maximum number of results (3, 5, 10, or 20 in the dashboard).
+- View ranked matching tweets with their classification and sentiment.
+- Search requests are sent to the FastAPI `GET /comments/search` endpoint.
+
+**CSV Upload & Batch Processing**
+
+- Upload a `.csv` file using **Browse files**.
+- Preview the first ten rows and click **Start Processing**.
+- Each row is submitted individually to `POST /comments` for classification, sentiment analysis, embedding generation, and database storage.
+- View a progress bar during processing and a summary of processed, successful, duplicate, and failed rows.
+- Processing stops early on serious backend errors or connection failures; progress reaching 100% indicates that all rows were attempted, not necessarily that they all succeeded.
+
+The CSV requires `tweet_id` and `text` columns. Optional columns include `airline_sentiment`, `airline`, `name`, and `tweet_created`. The uploader reads the file in memory; it does not require saving a permanent copy into the project. Keep input batches small for demonstrations because each new tweet may trigger paid OpenAI API calls.
 
 **Model & Prompt Evaluation**
 
@@ -570,7 +614,7 @@ The system supports multiple classification labels for a single tweet.
 
 **CSV Evaluation Files**
 
-Model comparison results are loaded from CSV files in the project's `data/` directory.
+Model comparison results are loaded from CSV files in the project's `data/` directory. These historical evaluation inputs are separate from the CSV files uploaded for operational processing.
 
 These files contain evaluation results, latency measurements, token usage, and estimated costs.
 
@@ -590,7 +634,7 @@ Therefore, the displayed evaluation results should not be interpreted as a direc
 
 ### 5. Dashboard Purpose
 
-The Streamlit dashboard provides a visual overview of customer feedback analysis and supports comparison of different AI models and prompt engineering approaches.
+The Streamlit dashboard provides a visual overview of customer feedback analysis, interactive classification filtering, semantic search, CSV ingestion, and comparison of different AI models and prompt engineering approaches.
 
 It separates operational data stored in PostgreSQL from experimental evaluation results stored in CSV files.
 
@@ -778,9 +822,9 @@ The current system provides an end-to-end workflow for processing airline custom
 
 Potential future improvements include:
 
-**1. Semantic Search**
+**1. Semantic Search Enhancements**
 
-Use stored tweet embeddings and pgvector similarity queries to retrieve customer feedback based on semantic meaning rather than exact keyword matches.
+Extend the implemented embedding-based nearest-neighbor search with similarity scores, configurable relevance thresholds, and systematic retrieval-quality evaluation.
 
 **2. Retrieval-Augmented Generation (RAG)**
 
@@ -810,9 +854,13 @@ The current version supports:
 - OpenAI-powered multi-label classification and sentiment analysis
 - Embedding generation and PostgreSQL/pgvector storage
 - Duplicate prevention and error handling
-- CSV batch processing
+- CSV batch processing through Python and the Streamlit uploader
+- Semantic search through FastAPI and Streamlit (tested locally with a synthetic example)
+- Classification filtering in the Streamlit dashboard
 - Streamlit dashboard visualizations
 - Model and prompt evaluation
 - Backend regression testing
 
-The system is currently configured for local development using Docker Desktop and PostgreSQL.
+During the November 18, 2026 local demonstration, a nine-row CSV upload reported 9 processed, 9 successful, 0 duplicate, and 0 failed requests. The classification filter returned 13 tweets for `All`, 12 for `Complaint`, 1 for `Compliment`, and 6 for `Request` at that time. These counts describe the test database, not the complete 3,822-tweet source dataset.
+
+The system is currently configured for local development using Docker Desktop and PostgreSQL. Screen recording, presentation material, and additional documentation are project-delivery activities rather than API features.
