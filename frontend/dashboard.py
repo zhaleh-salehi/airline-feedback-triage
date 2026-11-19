@@ -84,7 +84,56 @@ def get_latest_analyses():
 
         return results
 
+# ==========================================
+# CSV Duplicate Detection
+# ==========================================
 
+def check_csv_duplicates(df):
+    """
+    Check tweet IDs against PostgreSQL
+    and detect duplicates within the CSV.
+    """
+
+    tweet_ids = (
+        df["tweet_id"]
+        .astype(str)
+        .str.strip()
+        .tolist()
+    )
+
+    with SessionLocal() as db:
+        existing_ids = set(
+            db.scalars(
+                select(Comment.tweet_id).where(
+                    Comment.tweet_id.in_(tweet_ids)
+                )
+            ).all()
+        )
+
+    seen_ids = set()
+    statuses = []
+
+    for tweet_id in tweet_ids:
+
+        if not tweet_id:
+            status = "Invalid"
+
+        elif tweet_id in existing_ids:
+            status = "Duplicate (Database)"
+
+        elif tweet_id in seen_ids:
+            status = "Duplicate (CSV)"
+
+        else:
+            status = "New"
+            seen_ids.add(tweet_id)
+
+        statuses.append(status)
+
+    result = df.copy()
+    result["Status"] = statuses
+
+    return result
 # ==========================================
 # Semantic Search Functions
 # ==========================================
@@ -392,20 +441,29 @@ def process_csv_file(df):
                 )
 
     completed = processed == total
+    all_successful = completed and failed == 0
 
-    if completed:
+    if all_successful:
 
         progress_bar.progress(1.0)
 
         status_text.success(
-            "CSV processing completed!"
+            "CSV processing completed successfully! "
+            "All tweets were processed or identified as duplicates."
+        )
+
+    elif not completed:
+
+        status_text.error(
+            "CSV processing stopped before completion. "
+            "Please check the processing errors."
         )
 
     else:
 
         status_text.warning(
-            "CSV processing stopped before all rows "
-            "were processed."
+            "CSV processing finished with errors. "
+            "Some tweets could not be processed."
         )
 
     return {
@@ -640,20 +698,53 @@ if uploaded_file is not None:
 
             st.subheader("CSV Preview")
 
+            preview_df = check_csv_duplicates(csv_df)
+
+
+            def highlight_status(row):
+
+                if row["Status"].startswith("Duplicate"):
+                    color = "background-color: #ffcccc"
+
+                elif row["Status"] == "New":
+                    color = "background-color: #ccffcc"
+
+                else:
+                    color = "background-color: #fff2cc"
+
+                return [color] * len(row)
+
+
             st.dataframe(
-                csv_df.head(10),
+                preview_df.style.apply(
+                    highlight_status,
+                    axis=1
+                ),
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
+                height=300
             )
 
-            if len(csv_df) > 20:
+            new_count = (
+                    preview_df["Status"] == "New"
+            ).sum()
 
-                st.info(
-                    "For a quick project demonstration, "
-                    "consider testing with approximately "
-                    "10 tweets first. Larger files may "
-                    "take longer and generate API costs."
-                )
+            duplicate_count = (
+                preview_df["Status"].str.startswith("Duplicate")
+            ).sum()
+
+            invalid_count = (
+                    preview_df["Status"] == "Invalid"
+            ).sum()
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            col1.metric("Total Tweets", len(preview_df))
+            col2.metric("New", int(new_count))
+            col3.metric("Duplicates", int(duplicate_count))
+            col4.metric("Invalid", int(invalid_count))
+
+
 
             start_processing = st.button(
                 "🚀 Start Processing",
@@ -728,16 +819,25 @@ if "csv_processing_summary" in st.session_state:
             summary["Failed"]
         )
 
-    if summary["Completed"]:
+    if summary["Completed"] and summary["Failed"] == 0:
 
         st.success(
-            "All CSV rows have been processed."
+            "Batch processing completed successfully! "
+            "All tweets were processed or identified as duplicates."
+        )
+
+    elif not summary["Completed"]:
+
+        st.error(
+            "Batch processing stopped before completion. "
+            "Please check the errors below."
         )
 
     else:
 
         st.warning(
-            "Processing stopped before completion."
+            "Batch processing finished with errors. "
+            "Some tweets could not be processed."
         )
 
     if summary["Errors"]:
@@ -883,7 +983,78 @@ try:
             sentiment_counts.update(
                 [tweet.sentiment]
             )
+    # ======================================
+    # Multi-label Combination Distribution
+    # ======================================
 
+    st.subheader("Multi-label Combination Distribution")
+
+    combination_counts = Counter()
+
+    label_order = [
+        "complaint",
+        "compliment",
+        "request"
+    ]
+
+    for tweet in tweets:
+
+        labels = set(tweet.classification or [])
+
+        ordered_labels = [
+            label
+            for label in label_order
+            if label in labels
+        ]
+
+        if ordered_labels:
+
+            combination = " + ".join(
+                label.title()
+                for label in ordered_labels
+            )
+
+            combination_counts[combination] += 1
+
+    combination_df = pd.DataFrame(
+        [
+            {
+                "Classification Combination": combination,
+                "Tweets": count
+            }
+            for combination, count
+            in combination_counts.items()
+        ]
+    )
+
+    if combination_df.empty:
+
+        st.info("No classification data available.")
+
+    else:
+
+        combination_df = combination_df.sort_values(
+            "Tweets",
+            ascending=False
+        )
+
+        st.dataframe(
+            combination_df,
+            use_container_width=True,
+            hide_index=True,
+            height=300
+        )
+
+        st.bar_chart(
+            combination_df.set_index(
+                "Classification Combination"
+            )
+        )
+
+    st.caption(
+        "Each tweet is counted once based on "
+        "its exact classification combination."
+    )
     st.subheader("Sentiment Distribution")
 
     col1, col2, col3 = st.columns(3)
@@ -970,7 +1141,11 @@ try:
             "All",
             "Complaint",
             "Compliment",
-            "Request"
+            "Request",
+            "Complaint + Request",
+            "Complaint + Compliment",
+            "Compliment + Request",
+            "Complaint + Compliment + Request"
         ],
         index=0,
         key="classification_filter"
@@ -984,7 +1159,7 @@ try:
 
     for tweet in tweets:
 
-        labels = tweet.classification or []
+        labels = set(tweet.classification or [])
 
         if selected_classification == "All":
 
@@ -992,13 +1167,12 @@ try:
 
         else:
 
-            selected_label = (
-                selected_classification.lower()
+            selected_labels = set(
+                selected_classification.lower().split(" + ")
             )
 
-            if selected_label in labels:
+            if labels == selected_labels:
                 filtered_tweets.append(tweet)
-
     # --------------------------------------
     # Display Filter Results
     # --------------------------------------
