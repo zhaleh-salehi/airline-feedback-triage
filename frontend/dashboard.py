@@ -267,7 +267,7 @@ st.markdown(
 
 if selected_page == "Help":
 
-    st.title("Help & User Guide")
+    st.title("📖 Help & User Guide")
 
     # Give the three clickable guide headings the same visual treatment
     # as the Future Improvements heading, without changing navigation.
@@ -470,7 +470,6 @@ def show_tweet_details(tweet_id):
             )
             st.markdown("**Ticket status**")
             st.write("Not available — ticket management is planned")
-        st.caption("Ticket number and assignee are not yet implemented.")
 
 
 # ==========================================
@@ -529,16 +528,21 @@ def confirm_tweet_removal(tweet_id):
 
 def check_csv_duplicates(df):
     """
-    Check tweet IDs against PostgreSQL
-    and detect duplicates within the CSV.
+    Preview exact duplicates by tweet ID or (known username, exact text).
+    Checks both PostgreSQL and earlier rows in the uploaded CSV.
+    The backend remains responsible for enforcing duplicate rejection.
     """
 
-    tweet_ids = (
-        df["tweet_id"]
-        .astype(str)
-        .str.strip()
-        .tolist()
+    tweet_ids = df["tweet_id"].astype(str).str.strip().tolist()
+    names = (
+        df["name"].astype(str).str.strip().tolist()
+        if "name" in df.columns else [""] * len(df)
     )
+    texts = df["text"].astype(str).str.strip().tolist()
+
+    # Missing usernames must not be treated as one shared user.
+    usernames = {name.lower() for name in names if name}
+    candidate_texts = {text for text in texts if text}
 
     with SessionLocal() as db:
         existing_ids = set(
@@ -549,30 +553,53 @@ def check_csv_duplicates(df):
             ).all()
         )
 
+        existing_user_text_pairs = set()
+        if usernames and candidate_texts:
+            matching_rows = db.execute(
+                select(Comment.name, Comment.text).where(
+                    func.lower(func.btrim(Comment.name)).in_(usernames),
+                    Comment.text.in_(candidate_texts),
+                )
+            ).all()
+            existing_user_text_pairs = {
+                (name.strip().lower(), text)
+                for name, text in matching_rows
+                if name and text is not None
+            }
+
     seen_ids = set()
+    seen_user_text_pairs = set()
     statuses = []
 
-    for tweet_id in tweet_ids:
+    for tweet_id, name, text in zip(tweet_ids, names, texts):
+        user_text_pair = (name.lower(), text) if name else None
 
-        if not tweet_id:
+        if not tweet_id or not text:
             status = "Invalid"
-
         elif tweet_id in existing_ids:
             status = "Duplicate (Database)"
-
         elif tweet_id in seen_ids:
             status = "Duplicate (CSV)"
-
+        elif user_text_pair and user_text_pair in existing_user_text_pairs:
+            status = "Duplicate (Database: User + Text)"
+        elif user_text_pair and user_text_pair in seen_user_text_pairs:
+            status = "Duplicate (CSV: User + Text)"
         else:
             status = "New"
+
+        # Remember valid rows to identify repeats later in the same CSV.
+        if tweet_id and text:
             seen_ids.add(tweet_id)
+            if user_text_pair:
+                seen_user_text_pairs.add(user_text_pair)
 
         statuses.append(status)
 
     result = df.copy()
     result["Status"] = statuses
-
     return result
+
+
 # ==========================================
 # Semantic Search Functions
 # ==========================================
@@ -942,11 +969,6 @@ if selected_page == "Import New Tweets":
 
     st.header("📂 CSV Upload & Batch Processing")
 
-    st.write(
-        "Upload a CSV file containing airline tweets. "
-        "The tweets will be analyzed and stored "
-        "using the existing FastAPI backend."
-    )
 
     uploaded_file = st.file_uploader(
         "Choose a CSV file",
@@ -1624,10 +1646,6 @@ if selected_page == "Processed Tweets":
                                     st.session_state["edit_saved_feedback"] = True
                                     st.rerun()
 
-        st.caption(
-            "Multi-label classification: a tweet may appear "
-            "in multiple classification categories."
-        )
 
         st.divider()
     except Exception as exc:
@@ -1670,7 +1688,6 @@ try:
             combination_counts[combination] += 1
 
     st.markdown("### 📊 Feedback Overview")
-    st.caption("Live overview of the latest classifications stored in PostgreSQL")
     kpi_items = [
         ("Analyzed Tweets", total_tweets, "✈️"),
         ("Complaints", classification_counts.get("complaint", 0), "📣"),

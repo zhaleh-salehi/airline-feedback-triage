@@ -79,3 +79,34 @@ class ClassificationUpdate(BaseModel):
                 "Duplicate classification labels are not allowed."
             )
         return value
+
+# ==========================================
+# Input/Output: Read-only Semantic Duplicate Check
+# ==========================================
+
+class DuplicateCheckRequest(BaseModel):
+    name: str | None = None
+    text: str = Field(min_length=1)
+    tweet_id: str | None = None
+
+    @field_validator("text")
+    @classmethod
+    def validate_duplicate_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Tweet text cannot be empty or whitespace")
+        return value
+
+
+class PotentialDuplicateOut(BaseModel):
+    comment_id: int
+    tweet_id: str | None = None
+    name: str | None = None
+    text: str
+    similarity: float
+
+
+class DuplicateCheckResponse(BaseModel):
+    checked: bool
+    potential_duplicate: bool
+    matches: list[PotentialDuplicateOut] = Field(default_factory=list)
+    reason: str | None = None

@@ -1,4 +1,5 @@
 from fastapi import Depends, FastAPI, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
@@ -53,6 +54,31 @@ def create_comment(
             status_code=409,
             detail="Tweet already exists"
         )
+
+    # Also reject the exact same text from the same known username,
+    # even if the new tweet has a different tweet_id.
+    username = (comment.name or "").strip()
+    if username:
+        try:
+            existing_same_text = (
+                db.query(models.Comment.id)
+                .filter(
+                    func.lower(func.btrim(models.Comment.name)) == username.lower(),
+                    models.Comment.text == comment.text,
+                )
+                .first()
+            )
+        except SQLAlchemyError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Database error while checking duplicates"
+            ) from exc
+
+        if existing_same_text:
+            raise HTTPException(
+                status_code=409,
+                detail="Duplicate tweet: same username and exact text"
+            )
 
     # Step 2: AI Classification + Sentiment
     try:
@@ -214,6 +240,63 @@ def semantic_search(
             status_code=500,
             detail="Semantic search database error"
         ) from exc
+
+
+# ==========================================
+# POST /comments/check-duplicates
+# Read-only exact duplicate detection (no embeddings or AI)
+# ==========================================
+
+@app.post(
+    "/comments/check-duplicates",
+    response_model=schemas.DuplicateCheckResponse,
+)
+def check_exact_duplicates(
+    request: schemas.DuplicateCheckRequest,
+    db: Session = Depends(get_db),
+):
+    # A missing username must never match another anonymous tweet.
+    username = (request.name or "").strip()
+    if not username:
+        return schemas.DuplicateCheckResponse(
+            checked=False,
+            potential_duplicate=False,
+            reason="Username is missing; exact duplicate check skipped",
+        )
+
+    # Same username (ignoring capitalization/outer spaces) and EXACT text.
+    # No semantic similarity or threshold is involved.
+    try:
+        previous_tweets = (
+            db.query(models.Comment)
+            .filter(
+                func.lower(func.btrim(models.Comment.name)) == username.lower(),
+                models.Comment.text == request.text,
+            )
+            .order_by(models.Comment.id)
+            .limit(5)
+            .all()
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=500, detail="Duplicate check database error"
+        ) from exc
+
+    matches = [
+        schemas.PotentialDuplicateOut(
+            comment_id=previous.id,
+            tweet_id=previous.tweet_id,
+            name=previous.name,
+            text=previous.text,
+            similarity=1.0,
+        )
+        for previous in previous_tweets
+    ]
+    return schemas.DuplicateCheckResponse(
+        checked=True,
+        potential_duplicate=bool(matches),
+        matches=matches,
+    )
 
 
 # ==========================================
