@@ -268,3 +268,96 @@ def list_analyses(
         .limit(limit)
         .all()
     )
+
+# ==========================================
+# PATCH /comments/{comment_id}/classification
+# Manual Classification Override
+# ==========================================
+
+@app.patch(
+    "/comments/{comment_id}/classification",
+    response_model=schemas.AnalysisOut
+)
+def update_classification(
+    comment_id: int,
+    update: schemas.ClassificationUpdate,
+    db: Session = Depends(get_db)
+):
+
+    # Find the selected tweet
+    comment = db.get(models.Comment, comment_id)
+
+    if comment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Comment not found"
+        )
+
+    # Find the latest existing analysis
+    analysis = (
+        db.query(models.Analysis)
+        .filter(models.Analysis.comment_id == comment_id)
+        .order_by(models.Analysis.id.desc())
+        .first()
+    )
+
+    if analysis is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Analysis not found"
+        )
+
+    # Human decision overrides AI classification and sentiment
+    analysis.classification = update.classification
+    analysis.sentiment = update.sentiment
+
+    try:
+        db.commit()
+        db.refresh(analysis)
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update classification"
+        ) from exc
+
+    return analysis
+# ==========================================
+# DELETE /comments/{comment_id}
+# Permanently Remove Tweet
+# ==========================================
+
+@app.delete("/comments/{comment_id}")
+def delete_comment(
+    comment_id: int,
+    db: Session = Depends(get_db)
+):
+
+    # Find the selected tweet
+    comment = db.get(models.Comment, comment_id)
+
+    if comment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Comment not found"
+        )
+
+    # Delete tweet and related analyses
+    try:
+        db.delete(comment)
+        db.commit()
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete tweet"
+        ) from exc
+
+    return {
+        "message": "Tweet deleted successfully",
+        "deleted_comment_id": comment_id
+    }

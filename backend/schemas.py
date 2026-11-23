@@ -58,3 +58,24 @@ class CommentOut(CommentCreate):
     analyses: list[AnalysisOut] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
+# ==========================================
+# Input: Manual Classification & Sentiment Override
+# ==========================================
+
+class ClassificationUpdate(BaseModel):
+    classification: list[
+        Literal["complaint", "compliment", "request"]
+    ] = Field(min_length=1, max_length=3)
+
+    sentiment: Literal[
+        "positive", "negative", "neutral"
+    ]
+
+    @field_validator("classification")
+    @classmethod
+    def validate_classification(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError(
+                "Duplicate classification labels are not allowed."
+            )
+        return value
