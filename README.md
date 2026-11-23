@@ -18,7 +18,7 @@ Additionally, the system generates a 1536-dimensional embedding for each tweet u
 
 The tweet, its embedding, and the AI analysis results are stored in a PostgreSQL database with the pgvector extension, running inside Docker.
 
-An interactive Streamlit dashboard provides visualizations of customer feedback, comparisons of different AI models and prompt versions, semantic search, CSV upload and batch processing, and classification filtering.
+An interactive four-page Streamlit dashboard provides operational visualizations, exact multi-label classification filters, semantic search, CSV upload and batch processing, duplicate highlighting, manual tweet management, and comparisons of AI models and prompt versions.
 
 The project uses a dataset containing **3,822 United Airlines tweets**.
 
@@ -31,14 +31,16 @@ The project uses a dataset containing **3,822 United Airlines tweets**.
 - **Embedding Generation:** Generates a 1536-dimensional embedding for each tweet using OpenAI's `text-embedding-3-small` model.
 - **Vector Storage:** Stores embeddings in PostgreSQL using the pgvector extension.
 - **Analysis History:** Stores AI analysis results separately from the original tweets.
-- **Duplicate Prevention:** Prevents duplicate tweets using unique tweet identifiers.
+- **Exact Duplicate Prevention:** Rejects a tweet with HTTP `409` if its `tweet_id` already exists **or** if its normalized username and exact tweet text match a stored tweet, even when its ID differs. Username comparisons ignore case and surrounding whitespace; identical text from different usernames is not a duplicate solely on that basis. This is exact matching, not semantic-similarity-based deduplication.
 - **Error Handling:** Handles invalid input, duplicate tweets, AI failures, embedding failures, and database errors.
 - **Transaction Management:** Uses database transactions to prevent incomplete records.
 - **CSV Batch Processing:** Processes tweets sequentially through the existing FastAPI workflow, including uploads from the Streamlit dashboard.
-- **CSV Upload & Progress:** Accepts a local CSV file in Streamlit, previews its records, displays processing progress, and reports successful, duplicate, and failed submissions.
+- **CSV Upload, Preview & Progress:** Previews all CSV rows in a fixed-height (300 px) scrollable table; marks new rows green, duplicates red, and invalid rows yellow; displays processing progress and processed/successful/duplicate/failed counts. Duplicate checks include existing database records and repeated rows within the uploaded CSV, using tweet IDs or normalized username plus exact text.
 - **Semantic Search:** Uses query embeddings and pgvector cosine distance to rank stored tweets by semantic similarity, including when the exact search words do not appear in the tweet.
-- **Classification Filtering:** Filters analyzed tweets by `All`, `Complaint`, `Compliment`, or `Request`, supporting multiple labels per tweet.
-- **Interactive Dashboard:** Visualizes analyzed tweets, classification and sentiment distributions, semantic-search results, and model evaluation results.
+- **Exact Multi-label Filtering:** Filters analyzed tweets by `All` or any of the seven exact non-empty combinations of `Complaint`, `Compliment`, and `Request`. A tweet tagged `complaint` + `request` appears only under that exact combination (or `All`).
+- **Interactive Four-Page Dashboard:** Provides `Dashboard`, `Import New Tweets`, `Processed Tweets`, and `Help` pages with consistent modern styling, KPI cards, distributions, semantic-search results, and model evaluation results.
+- **Classification Combination Distribution:** Shows the number of tweets for each exact multi-label combination, counting each tweet once.
+- **Manual Tweet Management:** Supports manually editing a tweet’s classification and sentiment and deleting stored tweets through the dashboard.
 - **Model Comparison:** Compares six model/prompt combinations using accuracy, Macro F1, latency, token usage, and estimated API costs.
 
 ## Technologies
@@ -150,7 +152,7 @@ In both cases, each tweet is analyzed before its results are saved.
 
 Tweet information and analysis results are stored within a database transaction to prevent incomplete records.
 
-The system also checks for duplicate tweet identifiers before processing.
+Before processing, the system checks for duplicates using either a matching `tweet_id` or a matching **username and exact text**. Usernames are compared case-insensitively after trimming surrounding whitespace; tweet text is matched exactly. The backend rejects detected duplicates with HTTP `409`. This mechanism is independent of semantic search.
 
 ## Installation & Setup
 
@@ -391,7 +393,7 @@ The `--reload` option is intended for local development.
 
 ## API Endpoints
 
-The FastAPI backend provides six endpoints for processing, retrieving, and semantically searching airline customer feedback.
+The table below documents the core endpoints for processing, retrieving, and semantically searching airline customer feedback. The final dashboard also supports manual editing and deletion; consult the running application’s `/docs` for the authoritative current list of management endpoint paths and request schemas.
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -513,7 +515,7 @@ The API uses the following HTTP status codes:
 | Status Code | Description |
 |---|---|
 | `201` | Tweet successfully analyzed and stored |
-| `409` | Duplicate tweet or database constraint violation |
+| `409` | Duplicate tweet ID, or matching normalized username plus exact text; may also indicate a database uniqueness conflict |
 | `422` | Invalid input data |
 | `502` | AI analysis or embedding generation failure |
 | `500` | Database error during storage |
@@ -562,43 +564,51 @@ The default local address is:
 
 ### 2. Dashboard Features
 
-The dashboard includes the following components:
+The dashboard has four coordinated pages: **Dashboard**, **Import New Tweets**, **Processed Tweets**, and **Help**. Its final UI uses a consistent, minimal color scheme and streamlined sidebar, KPI cards, charts, and headings.
 
-**Operational Overview**
+**Dashboard — Operational Overview**
 
-- Total number of analyzed tweets
-- Classification distribution
-- Sentiment distribution
+- Total analyzed tweets and operational KPI cards
+- Classification and sentiment distributions
+- **Exact classification combination distribution** (chart and table); each tweet is counted once in this view
+- Model/prompt evaluation charts and historical experimental results
+
+**Processed Tweets — Analysis & Manual Management**
+
 - Interactive table of analyzed tweets
-- Filter by `All`, `Complaint`, `Compliment`, or `Request`
-- Support for multi-label classification (a tweet may appear under multiple filters)
+- Exact multi-label filters: `All`, `Complaint`, `Compliment`, `Request`, `Complaint + Request`, `Complaint + Compliment`, `Compliment + Request`, and `Complaint + Compliment + Request`
+- A tweet appears only under its exact classification combination or under `All`
+- Manual classification/sentiment editing and tweet deletion
+
+**Import New Tweets — CSV Upload & Batch Processing**
+
+- Upload a `.csv` file using **Browse files**
+- Preview **all rows** in a scrollable table with a fixed height of **300 pixels**, keeping **Start Processing** accessible even with larger files
+- Pre-check tweet IDs and normalized username + exact text for duplicates against both the database and the uploaded CSV
+- Color-coded status: 🟢 **New**, 🔴 **Duplicate** (database or CSV), 🟡 **Invalid**
+- Summary counts for total, new, duplicate, and invalid rows
+- Click **Start Processing** to submit rows individually through `POST /comments` for AI analysis, embedding generation, and database storage
+- Processing progress and a final summary of processed, successful, duplicate, and failed records
+- Distinct completion states: **Success** when all attempted rows succeeded or were duplicates; **Warning** when processing finished with failures; **Error** when a serious failure interrupted processing
+
+The CSV requires `tweet_id` and `text` columns. Optional columns include `airline_sentiment`, `airline`, `name`, and `tweet_created`. The uploader reads the file in memory; it does not require a permanent copy in the project. Each newly processed tweet can trigger paid OpenAI API calls, so keep demonstration batches small.
 
 **Semantic Search**
 
-- Enter a natural-language search phrase and click **Search**.
-- Choose the maximum number of results (3, 5, 10, or 20 in the dashboard).
-- View ranked matching tweets with their classification and sentiment.
-- Search requests are sent to the FastAPI `GET /comments/search` endpoint.
+- Enter a natural-language phrase, choose the maximum results (3, 5, 10, or 20 in the dashboard), and click **Search**
+- View semantically ranked stored tweets with classification and sentiment
+- Search queries use FastAPI `GET /comments/search`; similarity search is **not** used to determine duplicates
 
-**CSV Upload & Batch Processing**
+**Help**
 
-- Upload a `.csv` file using **Browse files**.
-- Preview the first ten rows and click **Start Processing**.
-- Each row is submitted individually to `POST /comments` for classification, sentiment analysis, embedding generation, and database storage.
-- View a progress bar during processing and a summary of processed, successful, duplicate, and failed rows.
-- Processing stops early on serious backend errors or connection failures; progress reaching 100% indicates that all rows were attempted, not necessarily that they all succeeded.
-
-The CSV requires `tweet_id` and `text` columns. Optional columns include `airline_sentiment`, `airline`, `name`, and `tweet_created`. The uploader reads the file in memory; it does not require saving a permanent copy into the project. Keep input batches small for demonstrations because each new tweet may trigger paid OpenAI API calls.
+- Provides dashboard usage guidance in the same visual style as the other pages
 
 **Model & Prompt Evaluation**
 
 - Comparison of six model/prompt combinations
-- Sentiment Accuracy
-- Classification Accuracy
-- Macro F1-score for classification and sentiment
-- Average API latency
-- Input and output token usage
-- Estimated API costs
+- Sentiment and classification accuracy and Macro F1
+- Average latency, input/output token usage, and estimated API costs
+- These are historical **v2/v3** single-label experiments; they are not an evaluation of the current **v4** multi-label prompt
 
 ### 3. Data Sources
 
@@ -634,7 +644,7 @@ Therefore, the displayed evaluation results should not be interpreted as a direc
 
 ### 5. Dashboard Purpose
 
-The Streamlit dashboard provides a visual overview of customer feedback analysis, interactive classification filtering, semantic search, CSV ingestion, and comparison of different AI models and prompt engineering approaches.
+The Streamlit dashboard provides a visual overview of customer feedback analysis, exact multi-label classification filtering, combination distributions, semantic search, CSV ingestion with duplicate highlighting, manual tweet management, and comparison of AI models and prompt engineering approaches.
 
 It separates operational data stored in PostgreSQL from experimental evaluation results stored in CSV files.
 
@@ -844,6 +854,10 @@ Integrate the existing regression tests into an automated continuous integration
 
 Prepare the application for deployment outside the local development environment, including secure configuration management and database backups.
 
+**6. Workflow Automation and Ticket Creation (Not Implemented)**
+
+Possible future extensions discussed with the mentor include periodic feedback collection using n8n, automated ingestion of airline customer feedback, automatic support-ticket creation, routing to responsible departments, repeated-complaint detection, and priority-based complaint handling. **Create Ticket and these automation/routing capabilities are not implemented in the current project.**
+
 ## Project Status
 
 The core application has been implemented and tested locally.
@@ -853,14 +867,21 @@ The current version supports:
 - FastAPI-based tweet processing
 - OpenAI-powered multi-label classification and sentiment analysis
 - Embedding generation and PostgreSQL/pgvector storage
-- Duplicate prevention and error handling
+- Exact duplicate detection by tweet ID or normalized username plus identical text, with HTTP `409` for duplicates
+- CSV preview duplicate highlighting (database and intra-CSV) and error handling
 - CSV batch processing through Python and the Streamlit uploader
 - Semantic search through FastAPI and Streamlit (tested locally with a synthetic example)
-- Classification filtering in the Streamlit dashboard
+- Exact multi-label classification combination filtering and combination distribution in Streamlit
+- Manual classification/sentiment editing and tweet deletion in the dashboard
+- Four-page modern Streamlit interface (`Dashboard`, `Import New Tweets`, `Processed Tweets`, `Help`)
 - Streamlit dashboard visualizations
 - Model and prompt evaluation
 - Backend regression testing
 
 During the November 18, 2026 local demonstration, a nine-row CSV upload reported 9 processed, 9 successful, 0 duplicate, and 0 failed requests. The classification filter returned 13 tweets for `All`, 12 for `Complaint`, 1 for `Compliment`, and 6 for `Request` at that time. These counts describe the test database, not the complete 3,822-tweet source dataset.
 
-The system is currently configured for local development using Docker Desktop and PostgreSQL. Screen recording, presentation material, and additional documentation are project-delivery activities rather than API features.
+Subsequent reported local checks included a 120-row scrollable CSV preview, a 10-new-tweet batch with 10 successful submissions, and an exact-duplicate batch test with 5 processed / 2 successful / 3 duplicate / 0 failed. These are local test observations, not performance benchmarks.
+
+The final Dashboard redesign and exact-duplicate changes were merged into `main` and pushed to GitHub at commit `482ee41` on November 23, 2026, as confirmed by the Git terminal output. This README update is documentation-only.
+
+The system is currently configured for local development using Docker Desktop and PostgreSQL. A project presentation and a 1 minute 55 second screen-recording video (V6) were prepared, and the video link was reported as added to Notion; mentor acceptance of the shorter video duration has not been confirmed. These are delivery artifacts, not API features.
